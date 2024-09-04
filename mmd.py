@@ -253,6 +253,12 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
             # The entropy loss.
             mean_entropy = reduce_mean_valid(_make_time_major(action_dist.entropy()))
 
+        # The summed weighted loss.
+        total_loss = mean_policy_loss - mean_entropy * self.entropy_coeff
+        # Optional additional KL Loss
+        if self.config["use_kl_loss"]:
+            total_loss += self.kl_coeff * mean_kl_loss
+
         # Compute outputs from magnet policy
         magnet_out, _ = self.magnet_policy(train_batch)
         magnet_dist = dist_class(magnet_out, self.magnet_policy)
@@ -266,12 +272,6 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
 
         # Add MMD loss to the total loss
         total_loss += mmd_loss
-
-        # The summed weighted loss.
-        total_loss = mean_policy_loss - mean_entropy * self.entropy_coeff
-        # Optional additional KL Loss
-        if self.config["use_kl_loss"]:
-            total_loss += self.kl_coeff * mean_kl_loss
 
         # Optional vf loss (or in a separate term due to separate
         # optimizers/networks).
@@ -315,10 +315,10 @@ class MMDAPPO(APPO):
     def get_default_policy_class(cls, config):
         return MMDAPPOTorchPolicy
     
-class OldMMDTorchPolicy(PPOTorchPolicy):
+class OldMMDTorchPolicy(APPOTorchPolicy):
     def __init__(self, observation_space, action_space, config):
         assert config['use_kl_loss'] == True, "use_kl_loss must be True for MMD"
-        
+
         super().__init__(observation_space, action_space, config)
     
     def loss(
