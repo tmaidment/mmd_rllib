@@ -299,10 +299,6 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
         other_agent_batches: Optional[Dict[Any, SampleBatch]] = None,
         episode: Optional["Episode"] = None,
     ):
-        # Ensure both models are on the same device
-        device = next(self.model.parameters()).device
-        self.magnet_policy.to(device)
-
         # Manually update magnet policy
         with torch.no_grad():
             self.magnet_policy.load_state_dict({
