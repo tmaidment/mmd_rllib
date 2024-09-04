@@ -60,12 +60,10 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
     def make_model(self) -> ModelV2:
         self.model = super().make_model()
         self.magnet_policy = super().make_model()
+        # copy weights from model to magnet_policy
+        self.magnet_policy.load_state_dict(self.model.state_dict())
         return self.model
-
-    def update_magnet_policy(self):
-        mag_lr = self.mag_lr(self.iteration)
-        for param, mag_param in zip(self.model.parameters(), self.magnet_policy.parameters()):
-            mag_param.data = mag_param.data.pow(1 - mag_lr) * param.data.pow(mag_lr)
+    
 
     def loss(
         self,
@@ -87,7 +85,6 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
                 of loss tensors.
         """
         target_model = self.target_models[model]
-        magnet_model = self.magnet_policy
 
         model_out, _ = model(train_batch)
         action_dist = dist_class(model_out, model)
@@ -121,10 +118,6 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
             train_batch[SampleBatch.VALUES_BOOTSTRAPPED]
         )
         bootstrap_value = bootstrap_values_time_major[-1]
-
-        # Compute MMD loss
-        mmd_loss = self._compute_mmd_loss(action_dist, magnet_dist, prev_action_dist, actions, rewards, values)
-
 
         if self.is_recurrent():
             max_seq_len = torch.max(train_batch[SampleBatch.SEQ_LENS])
@@ -299,6 +292,24 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
             return loss_wo_vf, mean_vf_loss
         else:
             return total_loss
+        
+    def postprocess_trajectory(
+        self,
+        sample_batch: SampleBatch,
+        other_agent_batches: Optional[Dict[Any, SampleBatch]] = None,
+        episode: Optional["Episode"] = None,
+    ):
+        # Manually update magnet policy
+        with torch.no_grad():
+            self.magnet_policy.load_state_dict({
+                name: self.mag_lr(self.iteration) * main_param + (1 - self.mag_lr(self.iteration)) * magnet_param
+                for (name, main_param), (_, magnet_param) in zip(
+                    self.model.named_parameters(),
+                    self.magnet_policy.named_parameters()
+                )
+            })
+        sample_batch = super().postprocess_trajectory(sample_batch, other_agent_batches, episode)
+        return sample_batch
 
     # @override(APPOTorchPolicy)
     # def stats_fn(self, train_batch: SampleBatch) -> Dict[str, TensorType]:
