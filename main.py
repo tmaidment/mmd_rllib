@@ -56,12 +56,11 @@ parser.add_argument(
 )
 
 def env_creator(args):
-    env = rps_v2.env(num_actions=5, max_cycles=15)
+    env = rps_v2.env(num_actions=3, max_cycles=100)
     return env
 
 register_trainable("MMDAPPO", MMDAPPO)
 register_trainable("OldMMDAPPO", OldMMDAPPO)
-register_trainable("MMDPPO", MMDPPO)
 register_env("NashEnv", lambda config: PettingZooEnv(env_creator(config)))
 
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
@@ -93,13 +92,13 @@ class ActionDistributionCallback(DefaultCallbacks):
 def run_same_policy(args, stop):
     """Use the same policy for both agents (trivial case)."""
     config = (
-        get_trainable_cls("PPO")
+        get_trainable_cls("APPO")
         .get_default_config()
         .environment("NashEnv")
         .framework(args.framework)
         .callbacks(ActionDistributionCallback)
         .env_runners(
-            num_env_runners=8
+            num_env_runners=os.cpu_count() - 2
         )
         .learners(
             num_gpus_per_learner=1
@@ -120,7 +119,7 @@ def run_same_policy(args, stop):
     )
 
     results = tune.Tuner(
-        "MMDPPO",
+        "MMDAPPO",
         param_space=config,
         run_config=air.RunConfig(stop=stop, callbacks=[wandb_logger], verbose=1)
     ).fit()
