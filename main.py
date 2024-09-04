@@ -56,7 +56,7 @@ parser.add_argument(
 )
 
 def env_creator(args):
-    env = rps_v2.env(num_actions=3, max_cycles=100)
+    env = rps_v2.env(num_actions=15, max_cycles=100)
     return env
 
 register_trainable("MMDAPPO", MMDAPPO)
