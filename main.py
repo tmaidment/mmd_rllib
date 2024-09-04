@@ -125,7 +125,7 @@ def run_same_policy(args, stop):
     )
 
     results = tune.Tuner(
-        "APPO",
+        "MMDAPPO",
         param_space=config,
         run_config=air.RunConfig(stop=stop, callbacks=[wandb_logger], verbose=1)
     ).fit()
