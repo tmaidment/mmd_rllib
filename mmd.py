@@ -549,3 +549,124 @@ class OldMMDTorchPolicy(APPOTorchPolicy):
 class OldMMDAPPO(APPO):
     def get_default_policy_class(cls, config):
         return OldMMDTorchPolicy
+    
+class MMDPPOTorchPolicy(PPOTorchPolicy):
+    def __init__(self, observation_space, action_space, config):
+        # Initialize MMD-specific parameters
+        self.temp_schedule = config.get("temp_schedule", lambda t: 1.0 / (t + 1))
+        self.lr_schedule = config.get("mag_lr_schedule", lambda t: 0.1 / (t + 1))
+        self.mag_lr_schedule = config.get("mag_lr_schedule", lambda t: 0.05 / (t + 1))
+        self.iteration = 0
+        self.magnet_logits = None
+        super().__init__(observation_space, action_space, config)
+
+    def loss(self, model: ModelV2, dist_class: Type[ActionDistribution],
+             train_batch: SampleBatch) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+        
+        # Compute logits and state
+        logits, state = model(train_batch)
+        curr_action_dist = dist_class(logits, model)
+
+        # RNN handling (if applicable)
+        if state:
+            max_seq_len = logits.shape[0] // len(train_batch[SampleBatch.SEQ_LENS])
+            mask = sequence_mask(
+                train_batch[SampleBatch.SEQ_LENS],
+                max_seq_len,
+                time_major=model.is_time_major()
+            )
+            mask = torch.reshape(mask, [-1])
+            num_valid = torch.sum(mask)
+
+            def reduce_mean_valid(t):
+                return torch.sum(t[mask]) / num_valid
+        else:
+            mask = None
+            reduce_mean_valid = torch.mean
+
+        # Compute MMD-specific components
+        prev_action_dist = dist_class(train_batch[SampleBatch.ACTION_DIST_INPUTS], model)
+        logp_ratio = torch.exp(
+            curr_action_dist.logp(train_batch[SampleBatch.ACTIONS])
+            - train_batch[SampleBatch.ACTION_LOGP]
+        )
+
+        # Compute temperature and learning rates for this iteration
+        temp = self.temp_schedule(self.iteration)
+        lr = self.lr_schedule(self.iteration)
+        mag_lr = self.mag_lr_schedule(self.iteration)
+
+        # Compute MMD loss
+        kl_div = prev_action_dist.kl(curr_action_dist)
+        surrogate_loss = -train_batch[Postprocessing.ADVANTAGES] * logp_ratio
+        entropy = curr_action_dist.entropy()
+
+        # Compute energy for policy update
+        old_logits = train_batch[SampleBatch.ACTION_DIST_INPUTS]
+        old_pol = torch.softmax(old_logits, dim=-1)
+        if self.magnet_logits is None or self.magnet_logits.shape != old_logits.shape:
+            self.magnet_logits = old_logits
+            print("logit missmatch")
+        mag_pol = torch.softmax(self.magnet_logits, dim=-1)
+        
+        energy = (torch.log(old_pol) + 
+                lr * temp * torch.log(mag_pol) + 
+                lr * train_batch[Postprocessing.ADVANTAGES].unsqueeze(-1)) / (1 + lr * temp)
+        
+        new_pol = torch.softmax(energy, dim=-1)
+
+        # Compute MMD-specific losses
+        kl_div = torch.sum(old_pol * (torch.log(old_pol) - torch.log(new_pol)), dim=-1)
+        magnetic_kl = torch.sum(new_pol * (torch.log(new_pol) - torch.log(mag_pol)), dim=-1)
+
+        # Compute policy loss
+        policy_loss = -torch.sum(new_pol * train_batch[Postprocessing.ADVANTAGES].unsqueeze(-1), dim=-1)
+
+        # Combine losses
+        total_loss = torch.mean(policy_loss + temp * kl_div + temp * magnetic_kl)
+
+        # Update magnet logits
+        with torch.no_grad():
+            self.magnet_logits = torch.log(
+                torch.pow(mag_pol, 1 - mag_lr) * torch.pow(new_pol, mag_lr)
+            )
+        # Compute value function loss
+        if self.config["use_critic"]:
+            value_fn_out = model.value_function()
+            vf_loss = torch.pow(
+                value_fn_out - train_batch[Postprocessing.VALUE_TARGETS], 2.0
+            )
+            vf_loss_clipped = torch.clamp(vf_loss, 0, self.config["vf_clip_param"])
+            mean_vf_loss = reduce_mean_valid(vf_loss_clipped)
+        else:
+            vf_loss_clipped = mean_vf_loss = torch.tensor(0.0).to(total_loss.device)
+
+        total_loss += self.config["vf_loss_coeff"] * mean_vf_loss
+
+        # Store stats
+        model.tower_stats["total_loss"] = total_loss
+        model.tower_stats["mean_policy_loss"] = reduce_mean_valid(surrogate_loss)
+        model.tower_stats["mean_vf_loss"] = mean_vf_loss
+        model.tower_stats["vf_explained_var"] = explained_variance(
+            train_batch[Postprocessing.VALUE_TARGETS], value_fn_out
+        )
+        model.tower_stats["mean_entropy"] = reduce_mean_valid(entropy)
+        model.tower_stats["mean_kl_loss"] = reduce_mean_valid(kl_div)
+        model.tower_stats["mean_magnetic_kl"] = reduce_mean_valid(magnetic_kl)
+
+        self.iteration += 1
+
+        return total_loss
+
+    def stats_fn(self, train_batch: SampleBatch) -> Dict[str, Union[float, np.ndarray]]:
+        stats = super().stats_fn(train_batch)
+        stats.update(convert_to_numpy({
+            "magnetic_kl": torch.mean(torch.stack(self.get_tower_stats("mean_magnetic_kl"))),
+            "temperature": self.temp_schedule(self.iteration),
+            "magnet_lr": self.mag_lr_schedule(self.iteration),
+        }))
+        return stats
+    
+class MMDPPO(PPO):
+    def get_default_policy_class(cls, config):
+        return MMDPPOTorchPolicy
