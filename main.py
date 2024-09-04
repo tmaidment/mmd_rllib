@@ -22,6 +22,7 @@ from ray.rllib.policy.policy import PolicySpec
 from ray.rllib.utils.framework import try_import_tf, try_import_torch
 from ray.rllib.utils.test_utils import check_learning_achieved
 from ray.tune.registry import register_env, register_trainable
+from ray.tune.registry import get_trainable_cls
 
 from mmd import MMDAPPO
 
@@ -90,7 +91,8 @@ class ActionDistributionCallback(DefaultCallbacks):
 def run_same_policy(args, stop):
     """Use the same policy for both agents (trivial case)."""
     config = (
-        PPOConfig()
+        get_trainable_cls("APPO")
+        .get_default_config()
         .environment("NashEnv")
         .framework(args.framework)
         .callbacks(ActionDistributionCallback)
