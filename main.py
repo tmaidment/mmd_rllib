@@ -24,7 +24,7 @@ from ray.rllib.utils.test_utils import check_learning_achieved
 from ray.tune.registry import register_env, register_trainable
 from ray.tune.registry import get_trainable_cls
 
-from mmd import MMDAPPO
+from mmd import MMDAPPO, OldMMDAPPO
 
 tf1, tf, tfv = try_import_tf()
 torch, _ = try_import_torch()
@@ -60,6 +60,7 @@ def env_creator(args):
     return env
 
 register_trainable("MMDAPPO", MMDAPPO)
+register_trainable("OldMMDAPPO", OldMMDAPPO)
 register_env("NashEnv", lambda config: PettingZooEnv(env_creator(config)))
 
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
@@ -118,7 +119,7 @@ def run_same_policy(args, stop):
     )
 
     results = tune.Tuner(
-        "APPO",
+        "OldMMDAPPO",
         param_space=config,
         run_config=air.RunConfig(stop=stop, callbacks=[wandb_logger], verbose=1)
     ).fit()
