@@ -102,16 +102,9 @@ def run_same_policy(args, stop):
         .learners(
             num_gpus_per_learner=1
         )
-        # .training(
-        #     train_batch_size='128',
-        # )
-        # .evaluation(
-        #     evaluation_interval=1,
-        #     evaluation_num_workers=1,
-        #     evaluation_duration='auto',
-        #     evaluation_duration_unit='timesteps',
-        #     evaluation_parallel_to_training=True,
-        # )
+        .training(
+            use_kl_loss=True,
+        )
         .reporting(
             min_time_s_per_iteration=30,
         )
@@ -125,7 +118,7 @@ def run_same_policy(args, stop):
     )
 
     results = tune.Tuner(
-        "MMDAPPO",
+        "APPO",
         param_space=config,
         run_config=air.RunConfig(stop=stop, callbacks=[wandb_logger], verbose=1)
     ).fit()

@@ -50,9 +50,9 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
         self.temp = config.get("temperature_schedule", lambda t: 1.0)
         self.mag_lr = config.get("magnet_learning_rate_schedule", lambda t: 0.01)
         self.objective = config.get("objective", "nash")
-        self._comparator = None
         self.magnet_policy = None
         self.iteration = 0
+        assert config['use_kl_loss'] == True, "use_kl_loss must be True for MMD"
 
         super().__init__(observation_space, action_space, config)
 
@@ -87,6 +87,7 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
                 of loss tensors.
         """
         target_model = self.target_models[model]
+        magnet_model = self.magnet_policy
 
         model_out, _ = model(train_batch)
         action_dist = dist_class(model_out, model)
@@ -161,7 +162,8 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
             )
 
             # Prepare KL for loss.
-            action_kl = _make_time_major(old_policy_action_dist.kl(action_dist))
+            # action_kl = _make_time_major(old_policy_action_dist.kl(action_dist))
+            reverse_action_kl = _make_time_major(action_dist.kl(old_policy_action_dist))
 
             # Compute vtrace on the CPU for better perf.
             vtrace_returns = vtrace.multi_from_logits(
@@ -248,6 +250,20 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
             # The entropy loss.
             mean_entropy = reduce_mean_valid(_make_time_major(action_dist.entropy()))
 
+        # Compute outputs from magnet policy
+        magnet_out, _ = self.magnet_policy(train_batch)
+        magnet_dist = dist_class(magnet_out, self.magnet_policy)
+
+        # KL divergence between current policy and magnet policy
+        kl_div = action_dist.kl(magnet_dist)
+
+        # MMD loss
+        temp = self.temp(self.iteration)
+        mmd_loss = -temp * torch.mean(kl_div)
+
+        # Add MMD loss to the total loss
+        total_loss += mmd_loss
+
         # The summed weighted loss.
         total_loss = mean_policy_loss - mean_entropy * self.entropy_coeff
         # Optional additional KL Loss
@@ -265,7 +281,8 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
         model.tower_stats["total_loss"] = total_loss
         model.tower_stats["mean_policy_loss"] = mean_policy_loss
         model.tower_stats["mean_kl_loss"] = mean_kl_loss
-        model.tower_stats["mean_reverse_kl_loss"] = mean_reverse_kl_loss
+        model.tower_stats["mmd_loss"] = mmd_loss
+        model.tower_stats["kl_div"] = torch.mean(kl_div)
         model.tower_stats["mean_vf_loss"] = mean_vf_loss
         model.tower_stats["mean_entropy"] = mean_entropy
         model.tower_stats["value_targets"] = value_targets
@@ -280,20 +297,16 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
         else:
             return total_loss
 
-    @override(APPOTorchPolicy)
-    def stats_fn(self, train_batch: SampleBatch) -> Dict[str, TensorType]:
-        stats = super().stats_fn(train_batch)
-        # stats.update({
-        #     "mmd_loss": torch.mean(torch.stack(self.get_tower_stats("mmd_loss"))),
-        #     "kl_div": torch.mean(torch.stack(self.get_tower_stats("kl_div"))),
-        #     "temperature": self.temp(self.iteration),
-        #     "mag_lr": self.mag_lr(self.iteration),
-        # })
-        return stats
-
-    @property
-    def comparator(self):
-        return self._comparator
+    # @override(APPOTorchPolicy)
+    # def stats_fn(self, train_batch: SampleBatch) -> Dict[str, TensorType]:
+    #     stats = super().stats_fn(train_batch)
+    #     stats.update({
+    #         "mmd_loss": torch.mean(torch.stack(self.get_tower_stats("mmd_loss"))),
+    #         "kl_div": torch.mean(torch.stack(self.get_tower_stats("kl_div"))),
+    #         "temperature": self.temp(self.iteration),
+    #         "mag_lr": self.mag_lr(self.iteration),
+    #     })
+    #     return stats
 
 class MMDAPPO(APPO):
     def get_default_policy_class(cls, config):
