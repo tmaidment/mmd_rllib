@@ -317,6 +317,8 @@ class MMDAPPO(APPO):
     
 class OldMMDTorchPolicy(PPOTorchPolicy):
     def __init__(self, observation_space, action_space, config):
+        assert config['use_kl_loss'] == True, "use_kl_loss must be True for MMD"
+        
         super().__init__(observation_space, action_space, config)
     
     def loss(
