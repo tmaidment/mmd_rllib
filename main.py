@@ -97,7 +97,6 @@ def run_same_policy(args, stop):
         .framework(args.framework)
         .callbacks(ActionDistributionCallback)
         .env_runners(
-            rollout_fragment_length=256,
             num_env_runners=8
         )
         .learners(
@@ -126,7 +125,7 @@ def run_same_policy(args, stop):
     )
 
     results = tune.Tuner(
-        "MMDAPPO",
+        "APPO",
         param_space=config,
         run_config=air.RunConfig(stop=stop, callbacks=[wandb_logger], verbose=1)
     ).fit()
