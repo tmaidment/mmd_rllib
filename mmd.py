@@ -416,6 +416,7 @@ class OldMMDTorchPolicy(APPOTorchPolicy):
 
             # Prepare KL for loss.
             action_kl = _make_time_major(old_policy_action_dist.kl(action_dist))
+            reverse_action_kl = _make_time_major(action_dist.kl(old_policy_action_dist))
 
             # Compute vtrace on the CPU for better perf.
             vtrace_returns = vtrace.multi_from_logits(
