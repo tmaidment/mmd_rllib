@@ -123,9 +123,7 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
 
         if self.is_recurrent():
             max_seq_len = torch.max(train_batch[SampleBatch.SEQ_LENS])
-            mask = sequence_mask(
-                train_batch[SampleBatch.SEQ_LENS], max_seq_len
-            )
+            mask = sequence_mask(train_batch[SampleBatch.SEQ_LENS], max_seq_len)
             mask = torch.reshape(mask, [-1])
             mask = _make_time_major(mask)
             num_valid = torch.sum(mask)
@@ -158,19 +156,22 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
                 )
 
             # Prepare actions for loss.
-            loss_actions = actions if is_multidiscrete else torch.unsqueeze(actions, dim=1)
+            loss_actions = (
+                actions if is_multidiscrete else torch.unsqueeze(actions, dim=1)
+            )
 
             # Prepare KL for loss.
-            _make_time_major(old_policy_action_dist.kl(action_dist))
-            # action_kl = _make_time_major(old_policy_action_dist.kl(action_dist))
-            reverse_action_kl = _make_time_major(action_dist.kl(old_policy_action_dist))
+            action_kl = _make_time_major(old_policy_action_dist.kl(action_dist))
 
             # Compute vtrace on the CPU for better perf.
             vtrace_returns = vtrace.multi_from_logits(
                 behaviour_policy_logits=_make_time_major(unpacked_behaviour_logits),
-                target_policy_logits=_make_time_major(unpacked_old_policy_behaviour_logits),
+                target_policy_logits=_make_time_major(
+                    unpacked_old_policy_behaviour_logits
+                ),
                 actions=torch.unbind(_make_time_major(loss_actions), dim=2),
-                discounts=(1.0 - _make_time_major(dones).float()) * self.config["gamma"],
+                discounts=(1.0 - _make_time_major(dones).float())
+                * self.config["gamma"],
                 rewards=_make_time_major(rewards),
                 values=values_time_major,
                 bootstrap_value=bootstrap_value,
@@ -182,8 +183,12 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
 
             actions_logp = _make_time_major(action_dist.logp(actions))
             prev_actions_logp = _make_time_major(prev_action_dist.logp(actions))
-            old_policy_actions_logp = _make_time_major(old_policy_action_dist.logp(actions))
-            is_ratio = torch.clamp(torch.exp(prev_actions_logp - old_policy_actions_logp), 0.0, 2.0)
+            old_policy_actions_logp = _make_time_major(
+                old_policy_action_dist.logp(actions)
+            )
+            is_ratio = torch.clamp(
+                torch.exp(prev_actions_logp - old_policy_actions_logp), 0.0, 2.0
+            )
             logp_ratio = is_ratio * torch.exp(actions_logp - prev_actions_logp)
             self._is_ratio = is_ratio
 
