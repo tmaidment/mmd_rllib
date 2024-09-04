@@ -24,7 +24,7 @@ from ray.rllib.utils.test_utils import check_learning_achieved
 from ray.tune.registry import register_env, register_trainable
 from ray.tune.registry import get_trainable_cls
 
-from mmd import MMDAPPO, OldMMDAPPO
+from mmd import MMDAPPO, OldMMDAPPO, MMDPPO
 
 tf1, tf, tfv = try_import_tf()
 torch, _ = try_import_torch()
@@ -61,6 +61,7 @@ def env_creator(args):
 
 register_trainable("MMDAPPO", MMDAPPO)
 register_trainable("OldMMDAPPO", OldMMDAPPO)
+register_trainable("MMDPPO", MMDPPO)
 register_env("NashEnv", lambda config: PettingZooEnv(env_creator(config)))
 
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
@@ -92,7 +93,7 @@ class ActionDistributionCallback(DefaultCallbacks):
 def run_same_policy(args, stop):
     """Use the same policy for both agents (trivial case)."""
     config = (
-        get_trainable_cls("APPO")
+        get_trainable_cls("PPO")
         .get_default_config()
         .environment("NashEnv")
         .framework(args.framework)
@@ -119,7 +120,7 @@ def run_same_policy(args, stop):
     )
 
     results = tune.Tuner(
-        "MMDAPPO",
+        "MMDPPO",
         param_space=config,
         run_config=air.RunConfig(stop=stop, callbacks=[wandb_logger], verbose=1)
     ).fit()
