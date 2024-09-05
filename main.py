@@ -57,7 +57,7 @@ parser.add_argument(
 )
 
 def env_creator(args):
-    env = rps_v2.env(num_actions=3, max_cycles=100)
+    env = rps_v2.env(num_actions=5, max_cycles=100)
     return env
 
 register_trainable("MMDAPPO", MMDAPPO)
@@ -70,7 +70,7 @@ class ActionDistributionCallback(DefaultCallbacks):
 
     def on_postprocess_trajectory(self, *, worker, episode, agent_id, policy_id, policies, postprocessed_batch, original_batches, **kwargs):
         # Get the actions taken in the current batch
-        action_counts = {action_id: 0 for action_id in range(5)}
+        action_counts = defaultdict(int)
         if 'actions' in postprocessed_batch:
             actions = postprocessed_batch['actions']
 

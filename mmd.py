@@ -261,7 +261,7 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
 
         # MMD loss
         temp = self.temp(self.iteration)
-        mmd_loss = -temp * torch.mean(kl_div)
+        mmd_loss = temp * torch.mean(kl_div)
 
         # Add MMD loss to the total loss
         total_loss += mmd_loss
