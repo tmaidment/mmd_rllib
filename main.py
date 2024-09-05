@@ -57,7 +57,7 @@ parser.add_argument(
 )
 
 def env_creator(args):
-    env = rps_v2.env(num_actions=5, max_cycles=15)
+    env = rps_v2.env(num_actions=3, max_cycles=100)
     return env
 
 register_trainable("MMDAPPO", MMDAPPO)
@@ -126,7 +126,6 @@ def run_same_policy(args, stop):
         )
         .training(
             use_kl_loss=True,
-            lr=0.001
         )
 
     )
