@@ -47,8 +47,8 @@ WARMUP_ITERATIONS = 10
 class MMDAPPOTorchPolicy(APPOTorchPolicy):
     def __init__(self, observation_space, action_space, config):
         # MMD-specific attributes
-        self.temp = config.get("temperature_schedule", lambda t: 1.0)
-        self.mag_lr = config.get("magnet_learning_rate_schedule", lambda t: 0.01)
+        self.temp = config.get("temperature_schedule", lambda t: 0.01)
+        self.mag_lr = config.get("magnet_learning_rate_schedule", lambda t: 0.005)
         self.objective = config.get("objective", "nash")
         self.magnet_policy = None
         self.iteration = 0
@@ -60,8 +60,8 @@ class MMDAPPOTorchPolicy(APPOTorchPolicy):
     def make_model(self) -> ModelV2:
         self.model = super().make_model()
         self.magnet_policy = super().make_model()
-        # copy weights from model to magnet_policy
-        self.magnet_policy.load_state_dict(self.model.state_dict())
+        # Don't copy weights from model to magnet_policy!
+        # self.magnet_policy.load_state_dict(self.model.state_dict())
         return self.model
     
 

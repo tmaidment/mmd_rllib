@@ -126,6 +126,7 @@ def run_same_policy(args, stop):
         )
         .training(
             use_kl_loss=True,
+            lr=0.001
         )
 
     )
