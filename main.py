@@ -1,8 +1,8 @@
 import argparse
 import os
 import numpy as np
-from pettingzoo.classic import rps_v2, leduc_holdem_v4
-from pettingzoo.atari import boxing_v2
+from collections import defaultdict
+from pettingzoo.classic import rps_v2
 import random
 
 import ray
@@ -23,6 +23,7 @@ from ray.rllib.utils.framework import try_import_tf, try_import_torch
 from ray.rllib.utils.test_utils import check_learning_achieved
 from ray.tune.registry import register_env, register_trainable
 from ray.tune.registry import get_trainable_cls
+from ray.rllib.algorithms import appo
 
 from mmd import MMDAPPO, OldMMDAPPO, MMDPPO
 
@@ -56,15 +57,12 @@ parser.add_argument(
 )
 
 def env_creator(args):
-    env = rps_v2.env(num_actions=5, max_cycles=100)
+    env = rps_v2.env(num_actions=5, max_cycles=15)
     return env
 
 register_trainable("MMDAPPO", MMDAPPO)
 register_trainable("OldMMDAPPO", OldMMDAPPO)
 register_env("NashEnv", lambda config: PettingZooEnv(env_creator(config)))
-
-from ray.rllib.algorithms.callbacks import DefaultCallbacks
-from collections import defaultdict
 
 class ActionDistributionCallback(DefaultCallbacks):
     def __init__(self):
@@ -72,17 +70,18 @@ class ActionDistributionCallback(DefaultCallbacks):
 
     def on_postprocess_trajectory(self, *, worker, episode, agent_id, policy_id, policies, postprocessed_batch, original_batches, **kwargs):
         # Get the actions taken in the current batch
-        actions = postprocessed_batch['actions']
+        action_counts = {action_id: 0 for action_id in range(5)}
+        if 'actions' in postprocessed_batch:
+            actions = postprocessed_batch['actions']
 
-        # Track the count of each action within the episode
-        action_counts = defaultdict(int)
-        for action in actions:
-            action_counts[action] += 1
+            # Track the count of each action within the episode
+            for action in actions:
+                action_counts[action] += 1
 
-        # Log the action counts as custom metrics
-        for action, count in action_counts.items():
-            # Record each action's count as a custom metric for the episode
-            episode.custom_metrics[f"action_{action}_count"] = count
+            # Log the action counts as custom metrics
+            for action, count in action_counts.items():
+                # Record each action's count as a custom metric for the episode
+                episode.custom_metrics[f"action_{action}_count"] = count
 
     def on_episode_end(self, *, worker, base_env, policies, episode, **kwargs):
         # Optionally, you could further process or log the data at the end of the episode
@@ -92,23 +91,43 @@ class ActionDistributionCallback(DefaultCallbacks):
 def run_same_policy(args, stop):
     """Use the same policy for both agents (trivial case)."""
     config = (
-        get_trainable_cls("APPO")
-        .get_default_config()
+        appo.APPOConfig()
         .environment("NashEnv")
         .framework(args.framework)
         .callbacks(ActionDistributionCallback)
-        .env_runners(
-            num_env_runners=os.cpu_count() - 2
+        .rollouts(num_rollout_workers=os.cpu_count() - 6)
+        .resources(
+            num_gpus=1
         )
-        .learners(
-            num_gpus_per_learner=1
-        )
-        .training(
-            use_kl_loss=True,
+        .multi_agent(
+            policies={
+                "main_agent": PolicySpec(
+                    config={
+                        "model": {
+                            "fcnet_hiddens": [64, 64],
+                            "fcnet_activation": "relu",
+                        },
+                    },
+                )
+            },
+            policy_mapping_fn=lambda agent_id, episode, **kwargs: "main_agent",
+            policies_to_train=["main_agent"],
+            count_steps_by="agent_steps",
         )
         .reporting(
             min_time_s_per_iteration=30,
         )
+        .evaluation(
+            evaluation_interval=1,
+            evaluation_duration='auto',
+            evaluation_duration_unit='timesteps',
+            evaluation_parallel_to_training=True,
+            evaluation_num_env_runners=6-2,
+        )
+        .training(
+            use_kl_loss=True,
+        )
+
     )
     wandb_logger = WandbLoggerCallback(
         project="rock-paper-scissors",
