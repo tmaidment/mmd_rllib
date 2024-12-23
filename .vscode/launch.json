@@ -9,6 +9,13 @@
             "type": "debugpy",
             "request": "launch",
             "module": "main"
+        },
+        {
+            "name": "Python Debugger: Test",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "test",
+            "args": []
         }
     ]
 }
