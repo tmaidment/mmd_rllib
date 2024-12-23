@@ -59,7 +59,7 @@ parser.add_argument(
 
 
 def env_creator(args):
-    env = boxing_v2.env()
+    env = rps_v2.env()
     return env
 
 

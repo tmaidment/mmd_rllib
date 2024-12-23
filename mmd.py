@@ -288,16 +288,13 @@ class EMAgnetTorchPolicy(APPOTorchPolicy):
 
         # Perform the magnet update
         with torch.no_grad():
-            self.magnet_policy.load_state_dict(
-                {
-                    name: self.mag_lr(self.iteration) * main_param
-                    + (1 - self.mag_lr(self.iteration)) * magnet_param
-                    for (name, main_param), (_, magnet_param) in zip(
-                        self.model.named_parameters(),
-                        self.magnet_policy.named_parameters(),
-                    )
-                }
-            )
+            for param, magnet_param in zip(
+                self.model.parameters(), self.magnet_policy.parameters()
+            ):
+                magnet_param.data = (
+                    self.mag_lr(self.iteration) * param.data
+                    + (1 - self.mag_lr(self.iteration)) * magnet_param.data
+                )
 
         # Return one total loss or two losses: vf vs rest (policy + kl).
         if self.config["_separate_vf_optimizer"]:
