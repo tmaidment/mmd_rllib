@@ -74,28 +74,42 @@ class EMAgnetTorchPolicy(APPOTorchPolicy):
             kl_div += 0.5 * torch.sum(weight_diff * weight_diff) / (self.weight_std ** 2)
         return kl_div
 
-    def compute_wasserstein(self, model1_params, model2_params, num_projections=100):
-        """Compute approximate Wasserstein distance using random projections"""
+    def compute_wasserstein(self, model1_params, model2_params, num_projections=10):
+        """Compute approximate Wasserstein distance using random projections with reduced memory usage"""
         w_dist = 0.0
         device = next(self.model.parameters()).device
+        
+        # Process parameters in chunks to reduce memory usage
         for p1, p2 in zip(model1_params, model2_params):
             w1 = p1.flatten()
             w2 = p2.flatten()
             
-            # Generate random projections
-            projections = torch.randn(num_projections, w1.shape[0]).to(device)
-            projections = projections / torch.norm(projections, dim=1, keepdim=True)
+            # Process projections in smaller batches
+            batch_size = min(num_projections, 2)  # Reduce batch size to save memory
+            num_batches = (num_projections + batch_size - 1) // batch_size
+            batch_dist = 0.0
             
-            # Project weights
-            proj1 = torch.matmul(projections, w1)
-            proj2 = torch.matmul(projections, w2)
+            for i in range(num_batches):
+                curr_batch_size = min(batch_size, num_projections - i * batch_size)
+                
+                # Generate random projections for current batch
+                projections = torch.randn(curr_batch_size, w1.shape[0], device=device)
+                projections = projections / torch.norm(projections, dim=1, keepdim=True)
+                
+                # Project weights and immediately compute distances
+                proj1 = torch.matmul(projections, w1)
+                proj2 = torch.matmul(projections, w2)
+                
+                # Sort and compute distances for this batch
+                sorted1, _ = torch.sort(proj1)
+                sorted2, _ = torch.sort(proj2)
+                batch_dist += torch.sum(torch.abs(sorted1 - sorted2))
+                
+                # Clear unnecessary tensors
+                del projections, proj1, proj2, sorted1, sorted2
+                
+            w_dist += batch_dist / num_projections
             
-            # Sort projected values
-            sorted1, _ = torch.sort(proj1)
-            sorted2, _ = torch.sort(proj2)
-            
-            # Compute 1D Wasserstein distance
-            w_dist += torch.mean(torch.abs(sorted1 - sorted2))
         return w_dist
 
     def loss(
