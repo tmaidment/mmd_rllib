@@ -52,6 +52,7 @@ class EMAgnetTorchPolicy(APPOTorchPolicy):
         self.mag_lr = config.get("magnet_learning_rate_schedule", lambda t: 0.005)
         self.magnet_policy = None
         self.iteration = 0
+        self.weight_std = config.get("weight_std", 0.1)  # Controls spread of weight distribution
 
         super().__init__(observation_space, action_space, config)
 
@@ -60,6 +61,42 @@ class EMAgnetTorchPolicy(APPOTorchPolicy):
         self.model = super().make_model()
         self.magnet_policy = super().make_model()
         return self.model
+
+    def compute_weight_kl_div(self, model1_params, model2_params):
+        """Compute KL divergence between weight distributions of two models.
+        Assumes weights follow Gaussian distributions centered at their current values."""
+        kl_div = 0.0
+        for p1, p2 in zip(model1_params, model2_params):
+            # Treating weights as means of Gaussian distributions with fixed std
+            # KL(N1||N2) = 0.5 * (log(std2^2/std1^2) + (std1^2 + (m1-m2)^2)/(std2^2) - 1)
+            # With same std, this simplifies to: 0.5 * (m1-m2)^2/std^2
+            weight_diff = p1 - p2
+            kl_div += 0.5 * torch.sum(weight_diff * weight_diff) / (self.weight_std ** 2)
+        return kl_div
+
+    def compute_wasserstein(self, model1_params, model2_params, num_projections=100):
+        """Compute approximate Wasserstein distance using random projections"""
+        w_dist = 0.0
+        device = next(self.model.parameters()).device
+        for p1, p2 in zip(model1_params, model2_params):
+            w1 = p1.flatten()
+            w2 = p2.flatten()
+            
+            # Generate random projections
+            projections = torch.randn(num_projections, w1.shape[0]).to(device)
+            projections = projections / torch.norm(projections, dim=1, keepdim=True)
+            
+            # Project weights
+            proj1 = torch.matmul(projections, w1)
+            proj2 = torch.matmul(projections, w2)
+            
+            # Sort projected values
+            sorted1, _ = torch.sort(proj1)
+            sorted2, _ = torch.sort(proj2)
+            
+            # Compute 1D Wasserstein distance
+            w_dist += torch.mean(torch.abs(sorted1 - sorted2))
+        return w_dist
 
     def loss(
         self,
@@ -255,12 +292,17 @@ class EMAgnetTorchPolicy(APPOTorchPolicy):
         magnet_out, _ = self.magnet_policy(train_batch)
         magnet_dist = dist_class(magnet_out, self.magnet_policy)
 
-        # KL divergence between current policy and magnet policy
         kl_div = action_dist.kl(magnet_dist)
 
-        # MMD loss
+        # Replace the KL computation based on logits with weight-based KL
+        weight_kl = self.compute_wasserstein(
+            self.model.parameters(),
+            self.magnet_policy.parameters()
+        )
+
+        # Replace the MMD loss computation
         temp = self.temp(self.iteration)
-        mmd_loss = temp * torch.mean(kl_div)
+        mmd_loss = temp * weight_kl
 
         # Add MMD loss to the total loss
         total_loss += mmd_loss
@@ -285,6 +327,7 @@ class EMAgnetTorchPolicy(APPOTorchPolicy):
             torch.reshape(value_targets, [-1]),
             torch.reshape(values_time_major, [-1]),
         )
+        model.tower_stats["weight_kl"] = torch.mean(weight_kl)
 
         # Perform the magnet update
         with torch.no_grad():
@@ -301,6 +344,51 @@ class EMAgnetTorchPolicy(APPOTorchPolicy):
             return loss_wo_vf, mean_vf_loss
         else:
             return total_loss
+        
+    @override(APPOTorchPolicy)
+    def stats_fn(self, train_batch: SampleBatch) -> Dict[str, TensorType]:
+        """Stats function for APPO. Returns a dict with important loss stats.
+
+        Args:
+            policy: The Policy to generate stats for.
+            train_batch: The SampleBatch (already) used for training.
+
+        Returns:
+            Dict[str, TensorType]: The stats dict.
+        """
+        stats_dict = {
+            "cur_lr": self.cur_lr,
+            "total_loss": torch.mean(torch.stack(self.get_tower_stats("total_loss"))),
+            "policy_loss": torch.mean(
+                torch.stack(self.get_tower_stats("mean_policy_loss"))
+            ),
+            "entropy": torch.mean(torch.stack(self.get_tower_stats("mean_entropy"))),
+            "entropy_coeff": self.entropy_coeff,
+            "var_gnorm": global_norm(self.model.trainable_variables()),
+            "vf_loss": torch.mean(torch.stack(self.get_tower_stats("mean_vf_loss"))),
+            "vf_explained_var": torch.mean(
+                torch.stack(self.get_tower_stats("vf_explained_var"))
+            ),
+        }
+
+        stats_dict["mmd_loss"] = torch.mean(torch.stack(self.get_tower_stats("mmd_loss")))
+        stats_dict["kl_div"] = torch.mean(torch.stack(self.get_tower_stats("kl_div")))
+        stats_dict["weight_kl"] = torch.mean(torch.stack(self.get_tower_stats("weight_kl")))
+
+        if self.config["vtrace"]:
+            is_stat_mean = torch.mean(self._is_ratio, [0, 1])
+            is_stat_var = torch.var(self._is_ratio, [0, 1])
+            stats_dict["mean_IS"] = is_stat_mean
+            stats_dict["var_IS"] = is_stat_var
+
+        if self.config["use_kl_loss"]:
+            stats_dict["kl"] = torch.mean(
+                torch.stack(self.get_tower_stats("mean_kl_loss"))
+            )
+            stats_dict["KL_Coeff"] = self.kl_coeff
+
+        return convert_to_numpy(stats_dict)
+
 
 
 class EMAgnetAPPO(APPO):

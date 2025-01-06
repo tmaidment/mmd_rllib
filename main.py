@@ -110,7 +110,7 @@ def run_same_policy(args, stop):
         .environment("NashEnv")
         .framework(args.framework)
         .callbacks(ActionDistributionCallback)
-        .rollouts(num_rollout_workers=os.cpu_count() - 6)
+        .rollouts(num_rollout_workers=8)
         .resources(num_gpus=1)
         .multi_agent(
             policies={
